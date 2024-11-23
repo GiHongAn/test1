@@ -1,0 +1,231 @@
+README.txt
+
+# 앱 검색 및 숨김 관리 프로그램
+
+## 기능
+1. 특정 키워드로 Google Play Store에서 앱을 검색합니다.
+2. 검색된 앱 중 특정 앱을 숨김 처리할 수 있습니다.
+3. 숨긴 앱은 "숨긴 앱 보기" 버튼을 통해 확인할 수 있으며, 숨김을 해제할 수 있습니다.
+	- 숨김 해제: 숨긴 앱 목록에서 앱을 선택하여 숨김을 해제할 수 있습니다.
+4. 숨김 데이터는 로컬 DB에 저장되며, 프로그램을 다시 실행해도 유지됩니다.
+
+## 설치 및 실행 방법
+1. Python 3.x 버전을 설치합니다.
+2. 필요한 라이브러리를 설치합니다:
+	- pip install google-play-scraper
+
+
+* `apps.db` 파일이 자동으로 생성됩니다. 기존 파일이 있다면 그대로 사용합니다.
+## 데이터베이스 구조
+- 파일 이름: `apps.db`
+- 테이블 이름: `hidden_apps`
+- `id` (INTEGER): 고유 ID
+- `name` (TEXT): 앱 이름
+- `developer` (TEXT): 개발자 이름
+- `app_id` (TEXT): 앱 고유 ID (Google Play Store 기준, UNIQUE)
+
+
+## 주의사항
+- 검색 결과는 필터링되며, 키워드가 포함되지 않는 앱은 검색되지 않습니다.
+	- 검색 필터링: "KEB", "HANA", "하나", "외환" 키워드를 포함한 앱만 표시합니다.
+
+# ================================================
+
+import sqlite3
+from tkinter import Tk, ttk, messagebox, Toplevel
+
+
+# DB 초기화 및 존재 여부 확인
+def init_db():
+    try:
+        conn = sqlite3.connect('apps.db')
+        cursor = conn.cursor()
+
+        # 숨길 앱 정보를 저장할 테이블 생성
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS hidden_apps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                developer TEXT,
+                app_id TEXT UNIQUE
+            )
+        ''')
+        conn.commit()
+    except sqlite3.Error as e:
+        messagebox.showerror("오류", f"DB 초기화 중 문제가 발생했습니다: {e}")
+    finally:
+        conn.close()
+
+
+# 숨긴 앱 저장
+def hide_app(app):
+    try:
+        conn = sqlite3.connect('apps.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR IGNORE INTO hidden_apps (name, developer, app_id)
+            VALUES (?, ?, ?)
+        ''', (app['title'], app['developer'], app['appId']))
+        conn.commit()
+    except sqlite3.Error as e:
+        messagebox.showerror("오류", f"앱 숨김 중 문제가 발생했습니다: {e}")
+    finally:
+        conn.close()
+
+
+# 숨긴 앱 제거
+def unhide_app(app_id):
+    try:
+        conn = sqlite3.connect('apps.db')
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM hidden_apps WHERE app_id = ?', (app_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        messagebox.showerror("오류", f"숨김 제거 중 문제가 발생했습니다: {e}")
+    finally:
+        conn.close()
+
+
+# 숨긴 앱 조회
+def get_hidden_apps():
+    try:
+        conn = sqlite3.connect('apps.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT name, developer, app_id FROM hidden_apps')
+        hidden_apps = cursor.fetchall()
+        return hidden_apps
+    except sqlite3.Error as e:
+        messagebox.showerror("오류", f"숨긴 앱 조회 중 문제가 발생했습니다: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+# 앱 검색 함수
+def search_apps(keyword):
+    from google_play_scraper import search
+    try:
+        apps = search(keyword, lang='ko', country='kr')
+        return apps
+    except Exception as e:
+        messagebox.showerror("오류", f"검색 중 문제가 발생했습니다: {e}")
+        return []
+
+
+# GUI 생성
+def create_gui():
+    def on_search():
+        keyword = search_entry.get()
+        if not keyword.strip():
+            messagebox.showwarning("경고", "검색어를 입력하세요.")
+            return
+
+        # 검색 실행
+        apps = search_apps(keyword)
+
+        # 필터링 (KEB, HANA, 하나, 외환)
+        filtered_apps = [
+            app for app in apps
+            if any(word in app['title'].lower() for word in ["keb", "hana", "하나", "외환"])
+        ]
+
+        # 숨긴 앱 제외
+        hidden_apps_ids = {app[2] for app in get_hidden_apps()}  # 숨긴 앱 ID 가져오기
+        visible_apps = [
+            app for app in filtered_apps if app['appId'] not in hidden_apps_ids
+        ]
+
+        # Treeview에 결과 표시
+        for row in tree.get_children():
+            tree.delete(row)
+        for app in visible_apps:
+            tree.insert('', 'end', values=(app['title'], app['developer'], app['appId']))
+
+    def on_hide():
+        selected_item = tree.selection()
+        if not selected_item:
+            messagebox.showwarning("경고", "숨길 앱을 선택하세요.")
+            return
+
+        for item in selected_item:
+            app_data = tree.item(item, "values")
+            app = {'title': app_data[0], 'developer': app_data[1], 'appId': app_data[2]}
+            hide_app(app)
+            tree.delete(item)
+
+        messagebox.showinfo("알림", "선택한 앱이 숨겨졌습니다.")
+
+    def show_hidden_apps():
+        hidden_apps = get_hidden_apps()
+        if not hidden_apps:
+            messagebox.showinfo("알림", "숨긴 앱이 없습니다.")
+            return
+
+        hidden_window = Toplevel()
+        hidden_window.title("숨긴 앱 목록")
+        hidden_window.geometry("600x400")
+
+        tree_hidden = ttk.Treeview(hidden_window, columns=("name", "developer", "app_id"), show="headings")
+        tree_hidden.heading("name", text="앱 이름")
+        tree_hidden.heading("developer", text="개발자")
+        tree_hidden.heading("app_id", text="앱 ID")
+
+        tree_hidden.column("name", width=200)
+        tree_hidden.column("developer", width=150)
+        tree_hidden.column("app_id", width=150)
+
+        tree_hidden.pack(fill="both", expand=True)
+
+        for app in hidden_apps:
+            tree_hidden.insert('', 'end', values=app)
+
+        def on_unhide():
+            selected_item = tree_hidden.selection()
+            if not selected_item:
+                messagebox.showwarning("경고", "숨김을 제거할 앱을 선택하세요.")
+                return
+
+            for item in selected_item:
+                app_data = tree_hidden.item(item, "values")
+                unhide_app(app_data[2])
+                tree_hidden.delete(item)
+
+            messagebox.showinfo("알림", "선택한 앱의 숨김이 해제되었습니다.")
+
+        ttk.Button(hidden_window, text="숨김 제거", command=on_unhide).pack(pady=10)
+
+    root = Tk()
+    root.title("앱 검색기")
+
+    search_frame = ttk.Frame(root, padding="10")
+    search_frame.pack(fill="x")
+    ttk.Label(search_frame, text="검색어:").pack(side="left")
+    search_entry = ttk.Entry(search_frame, width=40)
+    search_entry.pack(side="left", padx=5)
+    ttk.Button(search_frame, text="검색", command=on_search).pack(side="left", padx=5)
+    ttk.Button(search_frame, text="숨긴 앱 보기", command=show_hidden_apps).pack(side="left", padx=5)
+
+    tree_frame = ttk.Frame(root, padding="10")
+    tree_frame.pack(fill="both", expand=True)
+
+    tree = ttk.Treeview(tree_frame, columns=("name", "developer", "app_id"), show="headings")
+    tree.heading("name", text="앱 이름")
+    tree.heading("developer", text="개발자")
+    tree.heading("app_id", text="앱 ID")
+
+    tree.column("name", width=200)
+    tree.column("developer", width=150)
+    tree.column("app_id", width=200)
+
+    tree.pack(fill="both", expand=True)
+
+    button_frame = ttk.Frame(root, padding="10")
+    button_frame.pack(fill="x")
+    ttk.Button(button_frame, text="숨기기", command=on_hide).pack(side="left", padx=5)
+
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    init_db()
+    create_gui()
